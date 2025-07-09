@@ -112,13 +112,6 @@ type LexicalError struct {
 	Position int    `json:"position"`
 }
 
-// SyntaxError representa un error sintáctico
-type SyntaxError struct {
-	Message string `json:"message"`
-	Line    int    `json:"line"`
-	Command string `json:"command"`
-}
-
 // PatternMatch representa un patrón detectado
 type PatternMatch struct {
 	Pattern     string   `json:"pattern"`
@@ -139,4 +132,63 @@ type Anomaly struct {
 type UploadRequest struct {
 	Content  string `json:"content"`
 	Filename string `json:"filename,omitempty"`
+}
+
+// SpellingSuggestion representa una sugerencia de corrección ortográfica
+type SpellingSuggestion struct {
+	Original     string              `json:"original"`
+	Suggested    string              `json:"suggested"`
+	Confidence   float64             `json:"confidence"`
+	Reason       string              `json:"reason"`
+	Alternatives []CommandSuggestion `json:"alternatives,omitempty"`
+}
+
+// CommandSuggestion representa una sugerencia alternativa de comando
+type CommandSuggestion struct {
+	Command    string  `json:"command"`
+	Distance   int     `json:"distance"`
+	Similarity float64 `json:"similarity"`
+}
+
+// SyntaxValidation representa validaciones sintácticas adicionales
+type SyntaxValidation struct {
+	IsValidCommand     bool                `json:"is_valid_command"`
+	SpellingSuggestion *SpellingSuggestion `json:"spelling_suggestion,omitempty"`
+	StructureErrors    []StructureError    `json:"structure_errors,omitempty"`
+	SecurityWarnings   []SecurityWarning   `json:"security_warnings,omitempty"`
+}
+
+// StructureError representa errores en la estructura del comando
+type StructureError struct {
+	Type        string `json:"type"` // "missing_argument", "invalid_flag", "malformed_path", etc.
+	Description string `json:"description"`
+	Position    int    `json:"position"` // Posición del error en el comando
+	Suggestion  string `json:"suggestion"`
+}
+
+// SecurityWarning representa advertencias de seguridad en tiempo de escritura
+type SecurityWarning struct {
+	Type        string `json:"type"`  // "dangerous_flag", "suspicious_path", "privilege_escalation", etc.
+	Level       string `json:"level"` // "low", "medium", "high", "critical"
+	Description string `json:"description"`
+	Suggestion  string `json:"suggestion"`
+}
+
+type SyntaxError struct {
+	Message    string           `json:"message"`
+	Line       int              `json:"line"`
+	Command    string           `json:"command"`
+	Position   int              `json:"position,omitempty"`
+	Type       string           `json:"type"` // "unknown_command", "malformed_syntax", "missing_argument"
+	Validation SyntaxValidation `json:"validation"`
+}
+
+// CommandValidationResult representa el resultado de validar un comando
+type CommandValidationResult struct {
+	IsValid          bool                 `json:"is_valid"`
+	Command          string               `json:"command"`
+	ValidatedCommand *CommandAST          `json:"validated_command,omitempty"`
+	Errors           []SyntaxError        `json:"errors,omitempty"`
+	Warnings         []SecurityWarning    `json:"warnings,omitempty"`
+	Suggestions      []SpellingSuggestion `json:"suggestions,omitempty"`
 }

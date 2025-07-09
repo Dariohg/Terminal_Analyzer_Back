@@ -1,7 +1,6 @@
 package parser
 
 import (
-	_ "strings"
 	"terminal-history-analyzer/internal/models"
 )
 
@@ -201,14 +200,14 @@ func (sc *SpellChecker) CheckSpelling(command string) *models.SpellingSuggestion
 }
 
 // findSimilarCommands encuentra comandos similares usando distancia de Levenshtein
-func (sc *SpellChecker) findSimilarCommands(command string, maxDistance int) []internalCommandSuggestion {
-	var suggestions []internalCommandSuggestion
+func (sc *SpellChecker) findSimilarCommands(command string, maxDistance int) []CommandSuggestion {
+	var suggestions []CommandSuggestion
 
 	for knownCmd := range sc.knownCommands {
 		distance := levenshteinDistance(command, knownCmd)
 		if distance <= maxDistance && distance > 0 {
 			similarity := 1.0 - (float64(distance) / float64(max(len(command), len(knownCmd))))
-			suggestions = append(suggestions, internalCommandSuggestion{
+			suggestions = append(suggestions, CommandSuggestion{
 				Command:    knownCmd,
 				Distance:   distance,
 				Similarity: similarity,
@@ -233,8 +232,8 @@ func (sc *SpellChecker) findSimilarCommands(command string, maxDistance int) []i
 	return suggestions
 }
 
-// internalCommandSuggestion representa una sugerencia interna (para evitar conflicto con models)
-type internalCommandSuggestion struct {
+// CommandSuggestion representa una sugerencia de comando
+type CommandSuggestion struct {
 	Command    string  `json:"command"`
 	Distance   int     `json:"distance"`
 	Similarity float64 `json:"similarity"`
