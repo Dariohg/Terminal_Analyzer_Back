@@ -70,7 +70,6 @@ type ThreatDetection struct {
 	Suggestions []string    `json:"suggestions,omitempty"`
 }
 
-// AnalysisResult representa el resultado completo del análisis
 type AnalysisResult struct {
 	Summary struct {
 		TotalCommands    int                 `json:"total_commands"`
@@ -97,6 +96,9 @@ type AnalysisResult struct {
 		Patterns  []PatternMatch    `json:"patterns"`
 		Anomalies []Anomaly         `json:"anomalies"`
 	} `json:"semantic_analysis"`
+
+	// AGREGAR ESTE CAMPO NUEVO:
+	FileSystemAnalysis *FileSystemAnalysis `json:"filesystem_analysis,omitempty"`
 }
 
 // CommandFrequency representa la frecuencia de uso de comandos
@@ -191,4 +193,56 @@ type CommandValidationResult struct {
 	Errors           []SyntaxError        `json:"errors,omitempty"`
 	Warnings         []SecurityWarning    `json:"warnings,omitempty"`
 	Suggestions      []SpellingSuggestion `json:"suggestions,omitempty"`
+}
+
+// FileSystemError representa errores relacionados con el sistema de archivos virtual
+type FileSystemError struct {
+	Type              string             `json:"type"`                         // "directory_not_found", "file_not_found", etc.
+	Command           string             `json:"command"`                      // Comando que causó el error
+	Line              int                `json:"line"`                         // Línea donde ocurrió el error
+	Path              string             `json:"path"`                         // Ruta del archivo/directorio problemático
+	Description       string             `json:"description"`                  // Descripción del error
+	Suggestion        string             `json:"suggestion"`                   // Sugerencia para solucionarlo
+	MissingDependency *MissingDependency `json:"missing_dependency,omitempty"` // Dependencia faltante
+}
+
+// MissingDependency representa una dependencia faltante (archivo/directorio)
+type MissingDependency struct {
+	Type     string `json:"type"`     // "file", "directory"
+	Name     string `json:"name"`     // Nombre del archivo/directorio
+	Required string `json:"required"` // Comando necesario para crearlo
+}
+
+// FileSystemStateInfo proporciona información sobre el estado del sistema de archivos virtual
+type FileSystemStateInfo struct {
+	CurrentDirectory string   `json:"current_directory"`
+	DirectoryCount   int      `json:"directory_count"`
+	FileCount        int      `json:"file_count"`
+	CreatedDirs      []string `json:"created_directories"`
+	CreatedFiles     []string `json:"created_files"`
+}
+
+// FileSystemAnalysis representa el análisis completo del sistema de archivos
+type FileSystemAnalysis struct {
+	Errors       []FileSystemError   `json:"errors"`
+	State        FileSystemStateInfo `json:"state"`
+	Dependencies []DependencyChain   `json:"dependencies"`
+	Summary      FileSystemSummary   `json:"summary"`
+}
+
+// DependencyChain representa una cadena de dependencias
+type DependencyChain struct {
+	Command      string   `json:"command"`
+	Line         int      `json:"line"`
+	Dependencies []string `json:"dependencies"` // Lista de comandos requeridos antes
+}
+
+// FileSystemSummary proporciona un resumen del análisis del sistema de archivos
+type FileSystemSummary struct {
+	TotalErrors         int `json:"total_errors"`
+	MissingDirectories  int `json:"missing_directories"`
+	MissingFiles        int `json:"missing_files"`
+	UnreachableCommands int `json:"unreachable_commands"`
+	DirectoriesCreated  int `json:"directories_created"`
+	FilesCreated        int `json:"files_created"`
 }

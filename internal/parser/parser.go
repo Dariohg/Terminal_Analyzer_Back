@@ -1,301 +1,334 @@
 package parser
 
 import (
-	_ "strings"
+	"strings"
 	"terminal-history-analyzer/internal/models"
 )
 
-// SpellChecker contiene la lógica para detectar comandos mal escritos
-type SpellChecker struct {
-	knownCommands map[string]bool
-	commonTypos   map[string]string
+type Parser struct {
+	tokens       []models.Token
+	position     int
+	commands     []models.CommandAST
+	errors       []models.SyntaxError
+	warnings     []string
+	spellChecker *SpellChecker
 }
 
-// NewSpellChecker crea un nuevo verificador de ortografía
-func NewSpellChecker() *SpellChecker {
-	return &SpellChecker{
-		knownCommands: getKnownCommands(),
-		commonTypos:   getCommonTypos(),
+func NewParser(tokens []models.Token) *Parser {
+	return &Parser{
+		tokens:       filterTokens(tokens), // Filtrar whitespace y comentarios
+		position:     0,
+		commands:     make([]models.CommandAST, 0),
+		errors:       make([]models.SyntaxError, 0),
+		warnings:     make([]string, 0),
+		spellChecker: NewSpellChecker(),
 	}
 }
 
-// getKnownCommands retorna una lista de comandos válidos conocidos
-func getKnownCommands() map[string]bool {
-	commands := []string{
-		// Comandos básicos de navegación
-		"ls", "cd", "pwd", "echo", "cat", "grep", "find", "head", "tail",
-		"sort", "uniq", "wc", "diff", "file", "which", "whereis", "man",
+func (p *Parser) Parse() ([]models.CommandAST, []models.SyntaxError, []string) {
+	for p.position < len(p.tokens) {
+		if p.current().Type == models.NEWLINE || p.current().Type == models.EOF {
+			p.position++
+			continue
+		}
 
-		// Comandos de manejo de archivos
-		"cp", "mv", "rm", "mkdir", "rmdir", "touch", "chmod", "chown",
-		"tar", "gzip", "gunzip", "zip", "unzip", "ln", "du", "df",
-
-		// Comandos de red
-		"wget", "curl", "ssh", "scp", "rsync", "ping", "traceroute",
-		"netstat", "ss", "iptables", "dig", "nslookup", "host",
-
-		// Comandos de desarrollo
-		"git", "npm", "pip", "node", "python", "python3", "java", "gcc",
-		"make", "cmake", "mvn", "gradle", "docker", "kubectl",
-
-		// Editores
-		"vim", "vi", "nano", "emacs", "code", "gedit",
-
-		// Comandos de sistema
-		"sudo", "su", "ps", "top", "htop", "kill", "killall", "mount",
-		"umount", "systemctl", "service", "crontab", "jobs", "bg", "fg",
-		"nohup", "screen", "tmux", "history", "clear", "export", "alias",
-		"unalias", "whoami", "id", "groups", "passwd", "useradd", "userdel",
-
-		// Comandos de texto
-		"awk", "sed", "tr", "cut", "paste", "xargs", "tee", "less", "more",
-		"watch", "sort", "uniq", "comm", "join",
-
-		// Comandos de red y comunicación
-		"nc", "netcat", "socat", "openssl", "telnet", "ftp", "sftp",
-
-		// Comandos de monitoreo
-		"lsof", "strace", "ltrace", "tcpdump", "wireshark", "iotop",
-		"vmstat", "iostat", "free", "uptime", "uname",
+		cmd := p.parseCommand()
+		if cmd != nil {
+			p.commands = append(p.commands, *cmd)
+		}
 	}
 
-	result := make(map[string]bool)
-	for _, cmd := range commands {
-		result[cmd] = true
-	}
-	return result
+	return p.commands, p.errors, p.warnings
 }
 
-// getCommonTypos retorna errores típicos de escritura
-func getCommonTypos() map[string]string {
-	return map[string]string{
-		// Errores comunes en comandos populares
-		"suo":  "sudo",
-		"sud":  "sudo",
-		"sude": "sudo",
-		"suod": "sudo",
-		"dosu": "sudo",
-
-		"sl":  "ls",
-		"lss": "ls",
-		"lst": "ls",
-		"lis": "ls",
-
-		"cta": "cat",
-		"car": "cat",
-		"act": "cat",
-
-		"grp":   "grep",
-		"gerp":  "grep",
-		"grap":  "grep",
-		"greap": "grep",
-
-		"crul":  "curl",
-		"culr":  "curl",
-		"crurl": "curl",
-		"curll": "curl",
-
-		"wgte":  "wget",
-		"wegt":  "wget",
-		"wgett": "wget",
-
-		"shh":  "ssh",
-		"sssh": "ssh",
-		"ssh2": "ssh",
-
-		"chmdo":  "chmod",
-		"chmood": "chmod",
-		"chomd":  "chmod",
-		"chmode": "chmod",
-
-		"gti": "git",
-		"gut": "git",
-		"igt": "git",
-
-		"vmi": "vim",
-		"ivm": "vim",
-		"vom": "vim",
-
-		"tpo":  "top",
-		"opt":  "top",
-		"toop": "top",
-
-		"kil":   "kill",
-		"killl": "kill",
-		"klil":  "kill",
-
-		"mkdr":  "mkdir",
-		"mkidr": "mkdir",
-		"mdir":  "mkdir",
-
-		"mvoe": "move",
-		"moev": "move",
-
-		"celar": "clear",
-		"clera": "clear",
-		"claer": "clear",
-		"cler":  "clear",
-
-		"ehco":  "echo",
-		"ecoh":  "echo",
-		"eecho": "echo",
-
-		"hsitory": "history",
-		"histroy": "history",
-		"histry":  "history",
-
-		"fdin": "find",
-		"fnid": "find",
-		"fidn": "find",
-
-		"hcmod": "chmod",
-		"chmo":  "chmod",
-		"cmod":  "chmod",
-
-		"owch":  "chown",
-		"chon":  "chown",
-		"chonw": "chown",
-
-		"tuch":  "touch",
-		"touhc": "touch",
-		"toucn": "touch",
-
-		"mkfs.":   "mkfs", // Comandos que empiezan con mkfs
-		"umnt":    "umount",
-		"unmount": "umount",
-		"umoutn":  "umount",
-	}
-}
-
-// CheckSpelling verifica si un comando está mal escrito
-func (sc *SpellChecker) CheckSpelling(command string) *models.SpellingSuggestion {
-	// Si el comando es válido, no hay problema
-	if sc.knownCommands[command] {
+func (p *Parser) parseCommand() *models.CommandAST {
+	if p.position >= len(p.tokens) {
 		return nil
 	}
 
-	// Verificar errores conocidos primero
-	if correction, exists := sc.commonTypos[command]; exists {
-		return &models.SpellingSuggestion{
-			Original:   command,
-			Suggested:  correction,
-			Confidence: 0.95,
-			Reason:     "Error de tipeo común",
+	startLine := p.current().Line
+	var tokens []models.Token
+
+	// Recopilar tokens hasta el final de la línea o comando
+	for p.position < len(p.tokens) {
+		token := p.current()
+
+		if token.Type == models.NEWLINE || token.Type == models.EOF {
+			break
+		}
+
+		// Si encontramos un punto y coma, es el final del comando actual
+		if token.Type == models.OPERATOR && token.Value == ";" {
+			p.position++ // Consumir el punto y coma
+			break
+		}
+
+		tokens = append(tokens, token)
+		p.position++
+	}
+
+	if len(tokens) == 0 {
+		return nil
+	}
+
+	// Construir el comando raw
+	var rawParts []string
+	for _, token := range tokens {
+		rawParts = append(rawParts, token.Value)
+	}
+	raw := strings.Join(rawParts, " ")
+
+	// NUEVA VALIDACIÓN: Verificar que el primer token sea un comando válido
+	if len(tokens) > 0 {
+		firstToken := tokens[0]
+
+		// Si no es reconocido como comando, podría ser un error de tipeo
+		if firstToken.Type != models.COMMAND {
+			p.addEnhancedError("Se esperaba un comando válido", startLine, raw, 0, "unknown_command", firstToken.Value)
+			return nil
+		}
+
+		// NUEVA FUNCIONALIDAD: Verificar ortografía del comando
+		suggestion := p.spellChecker.CheckSpelling(firstToken.Value)
+		if suggestion != nil {
+			p.addSpellingError(firstToken.Value, suggestion, startLine, raw)
 		}
 	}
 
-	// Buscar comandos similares usando distancia de Levenshtein
-	suggestions := sc.findSimilarCommands(command, 2) // máximo 2 caracteres de diferencia
+	// Verificar que el primer token sea un comando
+	if tokens[0].Type != models.COMMAND {
+		p.addError("Se esperaba un comando", startLine, raw)
+		return nil
+	}
 
-	if len(suggestions) > 0 {
-		return &models.SpellingSuggestion{
-			Original:     command,
-			Suggested:    suggestions[0].Command,
-			Confidence:   suggestions[0].Similarity,
-			Reason:       "Comando similar encontrado",
-			Alternatives: suggestions[1:], // Otras sugerencias
+	// Parsear la estructura del comando
+	cmd := &models.CommandAST{
+		Command:   tokens[0].Value,
+		Arguments: make([]string, 0),
+		Flags:     make(map[string]string),
+		Redirects: make([]models.Redirect, 0),
+		Line:      startLine,
+		Raw:       raw,
+	}
+
+	// Verificar si hay pipes en el comando
+	if p.hasPipes(tokens) {
+		return p.parsePipedCommand(tokens, startLine, raw)
+	}
+
+	// Parsear argumentos, flags y redirecciones
+	for i := 1; i < len(tokens); i++ {
+		token := tokens[i]
+
+		switch token.Type {
+		case models.FLAG:
+			p.parseFlag(cmd, tokens, &i)
+		case models.REDIRECT:
+			p.parseRedirect(cmd, tokens, &i)
+		case models.ARGUMENT, models.PATH, models.URL, models.STRING, models.NUMBER:
+			cmd.Arguments = append(cmd.Arguments, token.Value)
+		case models.VARIABLE:
+			cmd.Arguments = append(cmd.Arguments, token.Value)
+			p.addWarning("Variable detectada: " + token.Value)
+		default:
+			p.addWarning("Token inesperado: " + token.Value)
 		}
 	}
 
-	return nil
+	return cmd
 }
 
-// findSimilarCommands encuentra comandos similares usando distancia de Levenshtein
-func (sc *SpellChecker) findSimilarCommands(command string, maxDistance int) []internalCommandSuggestion {
-	var suggestions []internalCommandSuggestion
+func (p *Parser) parsePipedCommand(tokens []models.Token, startLine int, raw string) *models.CommandAST {
+	// Dividir por pipes
+	var commandGroups [][]models.Token
+	var currentGroup []models.Token
 
-	for knownCmd := range sc.knownCommands {
-		distance := levenshteinDistance(command, knownCmd)
-		if distance <= maxDistance && distance > 0 {
-			similarity := 1.0 - (float64(distance) / float64(max(len(command), len(knownCmd))))
-			suggestions = append(suggestions, internalCommandSuggestion{
-				Command:    knownCmd,
-				Distance:   distance,
-				Similarity: similarity,
-			})
-		}
-	}
-
-	// Ordenar por similitud descendente
-	for i := 0; i < len(suggestions)-1; i++ {
-		for j := i + 1; j < len(suggestions); j++ {
-			if suggestions[i].Similarity < suggestions[j].Similarity {
-				suggestions[i], suggestions[j] = suggestions[j], suggestions[i]
+	for _, token := range tokens {
+		if token.Type == models.PIPE {
+			if len(currentGroup) > 0 {
+				commandGroups = append(commandGroups, currentGroup)
+				currentGroup = make([]models.Token, 0)
 			}
+		} else {
+			currentGroup = append(currentGroup, token)
 		}
 	}
 
-	// Retornar máximo 3 sugerencias
-	if len(suggestions) > 3 {
-		suggestions = suggestions[:3]
+	if len(currentGroup) > 0 {
+		commandGroups = append(commandGroups, currentGroup)
 	}
 
-	return suggestions
-}
-
-// internalCommandSuggestion representa una sugerencia interna (para evitar conflicto con models)
-type internalCommandSuggestion struct {
-	Command    string  `json:"command"`
-	Distance   int     `json:"distance"`
-	Similarity float64 `json:"similarity"`
-}
-
-// levenshteinDistance calcula la distancia de Levenshtein entre dos strings
-func levenshteinDistance(s1, s2 string) int {
-	if len(s1) == 0 {
-		return len(s2)
-	}
-	if len(s2) == 0 {
-		return len(s1)
+	if len(commandGroups) == 0 {
+		return nil
 	}
 
-	// Crear matriz
-	matrix := make([][]int, len(s1)+1)
-	for i := range matrix {
-		matrix[i] = make([]int, len(s2)+1)
+	// Parsear el primer comando
+	mainCmd := p.parseSimpleCommand(commandGroups[0], startLine)
+	if mainCmd == nil {
+		return nil
 	}
 
-	// Inicializar primera fila y columna
-	for i := 0; i <= len(s1); i++ {
-		matrix[i][0] = i
-	}
-	for j := 0; j <= len(s2); j++ {
-		matrix[0][j] = j
-	}
+	mainCmd.Raw = raw
 
-	// Llenar matriz
-	for i := 1; i <= len(s1); i++ {
-		for j := 1; j <= len(s2); j++ {
-			cost := 0
-			if s1[i-1] != s2[j-1] {
-				cost = 1
-			}
-
-			matrix[i][j] = min(
-				matrix[i-1][j]+1,      // eliminación
-				matrix[i][j-1]+1,      // inserción
-				matrix[i-1][j-1]+cost, // sustitución
-			)
+	// Parsear comandos en pipe
+	for i := 1; i < len(commandGroups); i++ {
+		pipeCmd := p.parseSimpleCommand(commandGroups[i], startLine)
+		if pipeCmd != nil {
+			mainCmd.Pipes = append(mainCmd.Pipes, pipeCmd)
 		}
 	}
 
-	return matrix[len(s1)][len(s2)]
+	return mainCmd
 }
 
-// Funciones auxiliares
-func min(a, b, c int) int {
-	if a <= b && a <= c {
-		return a
+func (p *Parser) parseSimpleCommand(tokens []models.Token, line int) *models.CommandAST {
+	if len(tokens) == 0 || tokens[0].Type != models.COMMAND {
+		return nil
 	}
-	if b <= c {
-		return b
+
+	cmd := &models.CommandAST{
+		Command:   tokens[0].Value,
+		Arguments: make([]string, 0),
+		Flags:     make(map[string]string),
+		Redirects: make([]models.Redirect, 0),
+		Line:      line,
 	}
-	return c
+
+	for i := 1; i < len(tokens); i++ {
+		token := tokens[i]
+
+		switch token.Type {
+		case models.FLAG:
+			p.parseFlag(cmd, tokens, &i)
+		case models.REDIRECT:
+			p.parseRedirect(cmd, tokens, &i)
+		case models.ARGUMENT, models.PATH, models.URL, models.STRING, models.NUMBER, models.VARIABLE:
+			cmd.Arguments = append(cmd.Arguments, token.Value)
+		}
+	}
+
+	return cmd
 }
 
-func max(a, b int) int {
-	if a > b {
-		return a
+func (p *Parser) parseFlag(cmd *models.CommandAST, tokens []models.Token, index *int) {
+	flag := tokens[*index]
+	flagName := strings.TrimLeft(flag.Value, "-")
+
+	// Verificar si el flag tiene un valor
+	if *index+1 < len(tokens) {
+		nextToken := tokens[*index+1]
+		if nextToken.Type == models.ARGUMENT || nextToken.Type == models.STRING ||
+			nextToken.Type == models.NUMBER || nextToken.Type == models.PATH {
+			cmd.Flags[flagName] = nextToken.Value
+			*index++ // Consumir el valor del flag
+		} else {
+			cmd.Flags[flagName] = "true"
+		}
+	} else {
+		cmd.Flags[flagName] = "true"
 	}
-	return b
+}
+
+func (p *Parser) parseRedirect(cmd *models.CommandAST, tokens []models.Token, index *int) {
+	redirect := tokens[*index]
+
+	// Buscar el target de la redirección
+	if *index+1 < len(tokens) {
+		target := tokens[*index+1]
+		cmd.Redirects = append(cmd.Redirects, models.Redirect{
+			Type:   redirect.Value,
+			Target: target.Value,
+		})
+		*index++ // Consumir el target
+	} else {
+		p.addError("Redirección sin target", cmd.Line, cmd.Raw)
+	}
+}
+
+func (p *Parser) hasPipes(tokens []models.Token) bool {
+	for _, token := range tokens {
+		if token.Type == models.PIPE {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *Parser) current() models.Token {
+	if p.position >= len(p.tokens) {
+		return models.Token{Type: models.EOF}
+	}
+	return p.tokens[p.position]
+}
+
+// NUEVAS FUNCIONES PARA SPELL CHECKING
+
+// addSpellingError - Agregar error de ortografía
+func (p *Parser) addSpellingError(original string, suggestion *models.SpellingSuggestion, line int, command string) {
+	validation := models.SyntaxValidation{
+		IsValidCommand:     false,
+		SpellingSuggestion: suggestion,
+	}
+
+	error := models.SyntaxError{
+		Message:    "Comando no reconocido: '" + original + "'. ¿Quisiste decir '" + suggestion.Suggested + "'?",
+		Line:       line,
+		Command:    command,
+		Type:       "spelling_error",
+		Validation: validation,
+	}
+
+	p.errors = append(p.errors, error)
+}
+
+// addEnhancedError - Agregar error mejorado
+func (p *Parser) addEnhancedError(message string, line int, command string, position int, errorType string, originalCommand string) {
+	// Intentar sugerir corrección
+	suggestion := p.spellChecker.CheckSpelling(originalCommand)
+
+	validation := models.SyntaxValidation{
+		IsValidCommand:     false,
+		SpellingSuggestion: suggestion,
+	}
+
+	error := models.SyntaxError{
+		Message:    message,
+		Line:       line,
+		Command:    command,
+		Position:   position,
+		Type:       errorType,
+		Validation: validation,
+	}
+
+	p.errors = append(p.errors, error)
+}
+
+func (p *Parser) addError(message string, line int, command string) {
+	p.errors = append(p.errors, models.SyntaxError{
+		Message: message,
+		Line:    line,
+		Command: command,
+		Type:    "parse_error",
+		Validation: models.SyntaxValidation{
+			IsValidCommand: false,
+		},
+	})
+}
+
+func (p *Parser) addWarning(message string) {
+	p.warnings = append(p.warnings, message)
+}
+
+// filterTokens elimina tokens innecesarios para el parsing
+func filterTokens(tokens []models.Token) []models.Token {
+	var filtered []models.Token
+
+	for _, token := range tokens {
+		// Mantener todos los tokens excepto whitespace y comentarios
+		if token.Type != models.WHITESPACE && token.Type != models.COMMENT {
+			filtered = append(filtered, token)
+		}
+	}
+
+	return filtered
 }

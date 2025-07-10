@@ -127,8 +127,8 @@ func getCommonTypos() map[string]string {
 		"mkidr": "mkdir",
 		"mdir":  "mkdir",
 
-		"mvoe": "move",
-		"moev": "move",
+		"mvoe": "mv",
+		"moev": "mv",
 
 		"celar": "clear",
 		"clera": "clear",
@@ -159,7 +159,6 @@ func getCommonTypos() map[string]string {
 		"touhc": "touch",
 		"toucn": "touch",
 
-		"mkfs.":   "mkfs", // Comandos que empiezan con mkfs
 		"umnt":    "umount",
 		"unmount": "umount",
 		"umoutn":  "umount",
@@ -187,27 +186,44 @@ func (sc *SpellChecker) CheckSpelling(command string) *models.SpellingSuggestion
 	suggestions := sc.findSimilarCommands(command, 2) // máximo 2 caracteres de diferencia
 
 	if len(suggestions) > 0 {
+		// Convertir sugerencias internas a modelos
+		var alternatives []models.CommandSuggestion
+		for i := 1; i < len(suggestions); i++ {
+			alternatives = append(alternatives, models.CommandSuggestion{
+				Command:    suggestions[i].Command,
+				Distance:   suggestions[i].Distance,
+				Similarity: suggestions[i].Similarity,
+			})
+		}
+
 		return &models.SpellingSuggestion{
 			Original:     command,
 			Suggested:    suggestions[0].Command,
 			Confidence:   suggestions[0].Similarity,
 			Reason:       "Comando similar encontrado",
-			Alternatives: suggestions[1:], // Otras sugerencias
+			Alternatives: alternatives,
 		}
 	}
 
 	return nil
 }
 
+// internalCommandSuggestion representa una sugerencia interna
+type internalCommandSuggestion struct {
+	Command    string
+	Distance   int
+	Similarity float64
+}
+
 // findSimilarCommands encuentra comandos similares usando distancia de Levenshtein
-func (sc *SpellChecker) findSimilarCommands(command string, maxDistance int) []CommandSuggestion {
-	var suggestions []CommandSuggestion
+func (sc *SpellChecker) findSimilarCommands(command string, maxDistance int) []internalCommandSuggestion {
+	var suggestions []internalCommandSuggestion
 
 	for knownCmd := range sc.knownCommands {
 		distance := levenshteinDistance(command, knownCmd)
 		if distance <= maxDistance && distance > 0 {
 			similarity := 1.0 - (float64(distance) / float64(max(len(command), len(knownCmd))))
-			suggestions = append(suggestions, CommandSuggestion{
+			suggestions = append(suggestions, internalCommandSuggestion{
 				Command:    knownCmd,
 				Distance:   distance,
 				Similarity: similarity,
@@ -230,13 +246,6 @@ func (sc *SpellChecker) findSimilarCommands(command string, maxDistance int) []C
 	}
 
 	return suggestions
-}
-
-// CommandSuggestion representa una sugerencia de comando
-type CommandSuggestion struct {
-	Command    string  `json:"command"`
-	Distance   int     `json:"distance"`
-	Similarity float64 `json:"similarity"`
 }
 
 // levenshteinDistance calcula la distancia de Levenshtein entre dos strings

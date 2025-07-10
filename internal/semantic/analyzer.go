@@ -8,12 +8,14 @@ import (
 )
 
 type Analyzer struct {
-	threats   []models.ThreatDetection
-	patterns  []models.PatternMatch
-	anomalies []models.Anomaly
+	threats         []models.ThreatDetection
+	patterns        []models.PatternMatch
+	anomalies       []models.Anomaly
+	filesystemState *FileSystemState
+	fsErrors        []models.FileSystemError
 }
 
-// Patrones de amenazas
+// Patrones de amenazas existentes...
 var (
 	// Comandos extremadamente peligrosos
 	criticalPatterns = map[string]string{
@@ -54,13 +56,17 @@ var (
 
 func NewAnalyzer() *Analyzer {
 	return &Analyzer{
-		threats:   make([]models.ThreatDetection, 0),
-		patterns:  make([]models.PatternMatch, 0),
-		anomalies: make([]models.Anomaly, 0),
+		threats:         make([]models.ThreatDetection, 0),
+		patterns:        make([]models.PatternMatch, 0),
+		anomalies:       make([]models.Anomaly, 0),
+		filesystemState: NewFileSystemState(),
+		fsErrors:        make([]models.FileSystemError, 0),
 	}
 }
 
+// Analyze realiza el análisis semántico completo incluyendo el sistema de archivos
 func (a *Analyzer) Analyze(commands []models.CommandAST) ([]models.ThreatDetection, []models.PatternMatch, []models.Anomaly) {
+	// Análisis tradicional de amenazas
 	for _, cmd := range commands {
 		a.analyzeCommand(cmd)
 	}
@@ -68,8 +74,146 @@ func (a *Analyzer) Analyze(commands []models.CommandAST) ([]models.ThreatDetecti
 	a.detectPatterns(commands)
 	a.detectAnomalies(commands)
 
+	// NUEVO: Análisis del sistema de archivos
+	a.analyzeFileSystem(commands)
+
 	return a.threats, a.patterns, a.anomalies
 }
+
+// AnalyzeWithFileSystem realiza análisis completo y retorna también errores del sistema de archivos
+func (a *Analyzer) AnalyzeWithFileSystem(commands []models.CommandAST) ([]models.ThreatDetection, []models.PatternMatch, []models.Anomaly, models.FileSystemAnalysis) {
+	// Análisis estándar
+	threats, patterns, anomalies := a.Analyze(commands)
+
+	// Crear análisis del sistema de archivos
+	fsAnalysis := models.FileSystemAnalysis{
+		Errors:       a.fsErrors,
+		State:        a.filesystemState.GetCurrentState(),
+		Dependencies: a.buildDependencyChains(commands),
+		Summary:      a.buildFileSystemSummary(),
+	}
+
+	return threats, patterns, anomalies, fsAnalysis
+}
+
+// analyzeFileSystem analiza cada comando en el contexto del sistema de archivos
+func (a *Analyzer) analyzeFileSystem(commands []models.CommandAST) {
+	for _, cmd := range commands {
+		// Procesar el comando y detectar errores del sistema de archivos
+		errors := a.filesystemState.ProcessCommand(cmd)
+		a.fsErrors = append(a.fsErrors, errors...)
+
+		// Convertir errores críticos del sistema de archivos en amenazas
+		for _, fsError := range errors {
+			if a.isFileSystemErrorCritical(fsError) {
+				a.addThreat(models.HIGH, "filesystem_error", fsError.Description, cmd)
+			}
+		}
+	}
+}
+
+// isFileSystemErrorCritical determina si un error del sistema de archivos es crítico
+func (a *Analyzer) isFileSystemErrorCritical(fsError models.FileSystemError) bool {
+	criticalTypes := []string{
+		"directory_not_found",
+		"file_not_found",
+		"parent_directory_not_found",
+	}
+
+	for _, criticalType := range criticalTypes {
+		if fsError.Type == criticalType {
+			return true
+		}
+	}
+
+	return false
+}
+
+// buildDependencyChains construye cadenas de dependencias entre comandos
+func (a *Analyzer) buildDependencyChains(commands []models.CommandAST) []models.DependencyChain {
+	var chains []models.DependencyChain
+
+	for _, cmd := range commands {
+		var dependencies []string
+
+		// Analizar dependencias según el tipo de comando
+		switch cmd.Command {
+		case "cd":
+			if len(cmd.Arguments) > 0 {
+				dir := cmd.Arguments[0]
+				if !a.filesystemState.directories[a.filesystemState.resolvePath(dir)] {
+					dependencies = append(dependencies, "mkdir "+dir)
+				}
+			}
+
+		case "cat", "less", "more", "head", "tail":
+			for _, arg := range cmd.Arguments {
+				if !strings.HasPrefix(arg, "-") {
+					if !a.filesystemState.files[a.filesystemState.resolvePath(arg)] {
+						dependencies = append(dependencies, "touch "+arg)
+					}
+				}
+			}
+
+		case "cp", "mv":
+			if len(cmd.Arguments) >= 2 {
+				source := cmd.Arguments[0]
+				if !a.filesystemState.files[a.filesystemState.resolvePath(source)] &&
+					!a.filesystemState.directories[a.filesystemState.resolvePath(source)] {
+					dependencies = append(dependencies, "touch "+source)
+				}
+			}
+
+		case "rm":
+			for _, arg := range cmd.Arguments {
+				if !strings.HasPrefix(arg, "-") {
+					if !a.filesystemState.files[a.filesystemState.resolvePath(arg)] &&
+						!a.filesystemState.directories[a.filesystemState.resolvePath(arg)] {
+						dependencies = append(dependencies, "touch "+arg)
+					}
+				}
+			}
+		}
+
+		if len(dependencies) > 0 {
+			chains = append(chains, models.DependencyChain{
+				Command:      cmd.Raw,
+				Line:         cmd.Line,
+				Dependencies: dependencies,
+			})
+		}
+	}
+
+	return chains
+}
+
+// buildFileSystemSummary construye un resumen del análisis del sistema de archivos
+func (a *Analyzer) buildFileSystemSummary() models.FileSystemSummary {
+	summary := models.FileSystemSummary{}
+
+	// Contar tipos de errores
+	for _, fsError := range a.fsErrors {
+		summary.TotalErrors++
+
+		switch fsError.Type {
+		case "directory_not_found", "parent_directory_not_found":
+			summary.MissingDirectories++
+		case "file_not_found":
+			summary.MissingFiles++
+		case "directory_without_recursive", "missing_argument":
+			summary.UnreachableCommands++
+		}
+	}
+
+	// Contar elementos creados
+	state := a.filesystemState.GetCurrentState()
+	summary.DirectoriesCreated = len(state.CreatedDirs)
+	summary.FilesCreated = len(state.CreatedFiles)
+
+	return summary
+}
+
+// Funciones existentes del analizador semántico...
 
 func (a *Analyzer) analyzeCommand(cmd models.CommandAST) {
 	// Análisis de comandos críticos
@@ -183,99 +327,100 @@ func (a *Analyzer) checkNetworkActivity(cmd models.CommandAST) {
 					"Conexión SSH como usuario root", cmd)
 			}
 			// IPs privadas sospechosas
-			if matched, _ := regexp.MatchString(`192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.`, arg); matched {
-				a.addThreat(models.LOW, "internal_ssh",
-					"Conexión SSH a red interna", cmd)
+			if matched, _ := regexp.MatchString(`192\.168\.|10\.|172\.`, arg); matched {
+				a.addThreat(models.LOW, "private_network_ssh",
+					"Conexión SSH a red privada", cmd)
 			}
 		}
 	}
 }
 
 func (a *Analyzer) checkFileManipulation(cmd models.CommandAST) {
-	if cmd.Command == "chmod" {
-		for _, arg := range cmd.Arguments {
-			if arg == "777" || arg == "666" || arg == "+x" {
-				a.addThreat(models.MEDIUM, "dangerous_permissions",
-					"Asignación de permisos peligrosos", cmd)
-			}
-		}
+	sensitiveFiles := []string{
+		"/etc/passwd", "/etc/shadow", "/etc/hosts", "/etc/fstab",
+		"/boot/", "/sys/", "/proc/", "~/.ssh/", "~/.bashrc",
 	}
 
-	if cmd.Command == "chown" && len(cmd.Arguments) > 0 {
-		if cmd.Arguments[0] == "root" || strings.Contains(cmd.Arguments[0], "root:") {
-			a.addThreat(models.MEDIUM, "root_ownership",
-				"Cambio de propietario a root", cmd)
+	if contains([]string{"cat", "less", "more", "head", "tail", "grep", "sed", "awk"}, cmd.Command) {
+		for _, arg := range cmd.Arguments {
+			for _, sensitive := range sensitiveFiles {
+				if strings.Contains(arg, sensitive) {
+					a.addThreat(models.MEDIUM, "sensitive_file_access",
+						"Acceso a archivo sensible del sistema: "+arg, cmd)
+				}
+			}
 		}
 	}
 }
 
 func (a *Analyzer) checkCommandChaining(cmd models.CommandAST) {
-	// Verificar pipes peligrosos
-	if len(cmd.Pipes) > 0 {
-		for _, pipe := range cmd.Pipes {
-			if contains([]string{"sh", "bash", "zsh", "python", "perl"}, pipe.Command) {
-				a.addThreat(models.HIGH, "pipe_execution",
-					"Ejecución de código a través de pipe", cmd)
-			}
-		}
-	}
+	// Esta función necesitaría acceso a comandos anteriores para detectar patrones
+	// Por ahora, detectamos algunos patrones básicos
 
-	// Verificar redirecciones peligrosas
-	for _, redirect := range cmd.Redirects {
-		if strings.HasPrefix(redirect.Target, "/dev/") {
-			a.addThreat(models.MEDIUM, "device_redirect",
-				"Redirección a dispositivo del sistema", cmd)
+	if strings.Contains(cmd.Raw, "&&") || strings.Contains(cmd.Raw, ";") {
+		if strings.Contains(cmd.Raw, "wget") && strings.Contains(cmd.Raw, "chmod") {
+			a.addThreat(models.HIGH, "download_execute_chain",
+				"Cadena de descarga y ejecución detectada", cmd)
 		}
 	}
 }
 
 func (a *Analyzer) checkSuspiciousDownloads(cmd models.CommandAST) {
 	if contains([]string{"wget", "curl"}, cmd.Command) {
-		// Buscar patrones de descarga y ejecución inmediata
-		commandLine := cmd.Raw
-		if matched, _ := regexp.MatchString(`(wget|curl).*\|.*sh`, commandLine); matched {
-			a.addThreat(models.HIGH, "download_execute",
-				"Descarga y ejecución inmediata de script", cmd)
+		for _, arg := range cmd.Arguments {
+			// Verificar patrones sospechosos en URLs
+			suspiciousPatterns := []string{
+				"malware", "payload", "exploit", "backdoor", "shell",
+				"reverse", "bind", "nc", "netcat",
+			}
+
+			for _, pattern := range suspiciousPatterns {
+				if strings.Contains(strings.ToLower(arg), pattern) {
+					a.addThreat(models.HIGH, "suspicious_filename",
+						"Descarga con nombre sospechoso: "+pattern, cmd)
+				}
+			}
 		}
 	}
 }
 
 func (a *Analyzer) detectPatterns(commands []models.CommandAST) {
-	commandCount := make(map[string]int)
-
-	// Contar frecuencia de comandos
-	for _, cmd := range commands {
-		commandCount[cmd.Command]++
-	}
-
 	// Detectar patrones de uso
-	if commandCount["history"] > 1 {
-		a.addPattern("history_clearing", "Múltiples intentos de limpiar historial",
-			commandCount["history"], []string{"history -c", "history -w"})
+	commandFreq := make(map[string]int)
+	sudoCommands := make([]string, 0)
+	networkCommands := make([]string, 0)
+
+	for _, cmd := range commands {
+		commandFreq[cmd.Command]++
+
+		if cmd.Command == "sudo" {
+			sudoCommands = append(sudoCommands, cmd.Raw)
+		}
+
+		if contains([]string{"wget", "curl", "ssh", "scp", "rsync"}, cmd.Command) {
+			networkCommands = append(networkCommands, cmd.Raw)
+		}
 	}
 
-	if commandCount["sudo"] > 10 {
-		a.addPattern("excessive_sudo", "Uso excesivo de sudo",
-			commandCount["sudo"], []string{"sudo command1", "sudo command2"})
+	// Patrón: Uso excesivo de sudo
+	if len(sudoCommands) > 5 {
+		a.addPattern("excessive_sudo", "Uso excesivo de sudo detectado", len(sudoCommands), sudoCommands[:3])
 	}
 
-	if commandCount["rm"] > 5 {
-		a.addPattern("frequent_deletion", "Múltiples operaciones de eliminación",
-			commandCount["rm"], []string{"rm file1", "rm -rf dir"})
+	// Patrón: Múltiples comandos de red
+	if len(networkCommands) > 3 {
+		a.addPattern("multiple_network", "Múltiples comandos de red detectados", len(networkCommands), networkCommands[:3])
 	}
 }
 
 func (a *Analyzer) detectAnomalies(commands []models.CommandAST) {
-	// Detectar comandos ejecutados a horas inusuales (si tuviéramos timestamps)
-
-	// Detectar secuencias sospechosas
+	// Detectar anomalías en secuencias de comandos
 	for i := 0; i < len(commands)-1; i++ {
 		current := commands[i]
 		next := commands[i+1]
 
-		// Descarga seguida de chmod +x
-		if contains([]string{"wget", "curl"}, current.Command) &&
-			next.Command == "chmod" && hasFlag(next, "x") {
+		// wget/curl seguido de chmod +x
+		if contains([]string{"wget", "curl"}, current.Command) && next.Command == "chmod" && hasFlag(next, "x") {
 			a.addAnomaly("download_execute_sequence",
 				"Secuencia de descarga y dar permisos de ejecución",
 				current.Raw+" ; "+next.Raw, current.Line)
@@ -361,6 +506,12 @@ func generateSuggestions(threatType string, cmd models.CommandAST) []string {
 			"Verifique la fuente antes de descargar archivos",
 			"Use dominios oficiales y repositorios confiables",
 			"Escanee archivos descargados antes de ejecutarlos",
+		}
+	case "filesystem_error":
+		return []string{
+			"Verifique que los directorios y archivos existan antes de usarlos",
+			"Cree las dependencias necesarias en el orden correcto",
+			"Use comandos como 'ls' para verificar la existencia de archivos",
 		}
 	default:
 		return []string{

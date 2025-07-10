@@ -21,36 +21,6 @@ type EnhancedAnalysisRequest struct {
 	ValidateSpelling bool   `json:"validate_spelling,omitempty"`
 }
 
-// EnhancedAnalysisResponse representa una respuesta de análisis mejorado
-type EnhancedAnalysisResponse struct {
-	*models.AnalysisResult
-	ValidationSummary *ValidationSummary `json:"validation_summary"`
-	ProcessingDetails *ProcessingDetails `json:"processing_details"`
-}
-
-// ValidationSummary proporciona un resumen de las validaciones
-type ValidationSummary struct {
-	TotalLines         int                         `json:"total_lines"`
-	ValidCommands      int                         `json:"valid_commands"`
-	SpellingErrors     int                         `json:"spelling_errors"`
-	StructureErrors    int                         `json:"structure_errors"`
-	SecurityWarnings   int                         `json:"security_warnings"`
-	TopSpellingErrors  []models.SpellingSuggestion `json:"top_spelling_errors"`
-	CriticalIssues     []string                    `json:"critical_issues"`
-	RecommendedActions []string                    `json:"recommended_actions"`
-}
-
-// ProcessingDetails proporciona detalles del procesamiento
-type ProcessingDetails struct {
-	LexingTime      time.Duration `json:"lexing_time"`
-	ParsingTime     time.Duration `json:"parsing_time"`
-	SemanticTime    time.Duration `json:"semantic_time"`
-	ValidationTime  time.Duration `json:"validation_time"`
-	TotalTime       time.Duration `json:"total_time"`
-	TokensProcessed int           `json:"tokens_processed"`
-	CommandsParsed  int           `json:"commands_parsed"`
-}
-
 // AnalyzeEnhanced maneja el análisis mejorado con validación sintáctica
 func AnalyzeEnhanced(c *gin.Context) {
 	var request EnhancedAnalysisRequest
@@ -69,19 +39,10 @@ func AnalyzeEnhanced(c *gin.Context) {
 		return
 	}
 
-	// Realizar análisis completo con medición de tiempo
-	result, processingDetails := performEnhancedAnalysis(request.Content)
+	// Realizar análisis completo
+	result := analyzeContentEnhanced(request.Content)
 
-	// Generar resumen de validación
-	validationSummary := generateValidationSummary(result)
-
-	response := &EnhancedAnalysisResponse{
-		AnalysisResult:    result,
-		ValidationSummary: validationSummary,
-		ProcessingDetails: processingDetails,
-	}
-
-	c.JSON(http.StatusOK, response)
+	c.JSON(http.StatusOK, result)
 }
 
 // ValidateRealTime maneja la validación en tiempo real
@@ -107,44 +68,28 @@ func ValidateRealTime(c *gin.Context) {
 	})
 }
 
-// performEnhancedAnalysis realiza el análisis completo con medición de tiempo
-func performEnhancedAnalysis(content string) (*models.AnalysisResult, *ProcessingDetails) {
-	totalStart := time.Now()
-	details := &ProcessingDetails{}
+// analyzeContentEnhanced realiza el análisis completo con validación mejorada
+func analyzeContentEnhanced(content string) *models.AnalysisResult {
+	startTime := time.Now()
 
-	// Análisis léxico con medición
-	lexStart := time.Now()
+	// Análisis léxico
 	lex := lexer.NewLexer(content)
 	tokens, lexErrors := lex.Tokenize()
-	details.LexingTime = time.Since(lexStart)
-	details.TokensProcessed = len(tokens)
 
-	// Análisis sintáctico mejorado con medición
-	parseStart := time.Now()
+	// Análisis sintáctico con SpellChecker
 	p := parser.NewParser(tokens)
 	commands, parseErrors, warnings := p.Parse()
-	details.ParsingTime = time.Since(parseStart)
-	details.CommandsParsed = len(commands)
 
-	// Análisis semántico con medición
-	semanticStart := time.Now()
+	// Análisis semántico CON sistema de archivos
 	analyzer := semantic.NewAnalyzer()
-	threats, patterns, anomalies := analyzer.Analyze(commands)
-	details.SemanticTime = time.Since(semanticStart)
-
-	// Validación adicional con medición
-	validationStart := time.Now()
-
-	// Aquí se pueden agregar validaciones adicionales específicas
-	enhancedParseErrors := enhanceParseErrors(parseErrors, commands)
-
-	details.ValidationTime = time.Since(validationStart)
-	details.TotalTime = time.Since(totalStart)
+	threats, patterns, anomalies, fsAnalysis := analyzer.AnalyzeWithFileSystem(commands)
 
 	// Estadísticas
 	commandFreq := calculateCommandFrequency(commands)
 	threatCount := calculateThreatCount(threats)
 	tokenStats := calculateTokenStats(tokens)
+
+	processingTime := time.Since(startTime)
 
 	return &models.AnalysisResult{
 		Summary: struct {
@@ -158,7 +103,7 @@ func performEnhancedAnalysis(content string) (*models.AnalysisResult, *Processin
 			UniqueCommands:   len(getUniqueCommands(commands)),
 			ThreatCount:      threatCount,
 			MostUsedCommands: commandFreq,
-			ProcessingTime:   details.TotalTime,
+			ProcessingTime:   processingTime,
 		},
 		LexicalAnalysis: struct {
 			Tokens     []models.Token           `json:"tokens"`
@@ -175,7 +120,7 @@ func performEnhancedAnalysis(content string) (*models.AnalysisResult, *Processin
 			Warnings    []string             `json:"warnings"`
 		}{
 			Commands:    commands,
-			ParseErrors: enhancedParseErrors,
+			ParseErrors: parseErrors,
 			Warnings:    warnings,
 		},
 		SemanticAnalysis: struct {
@@ -187,44 +132,24 @@ func performEnhancedAnalysis(content string) (*models.AnalysisResult, *Processin
 			Patterns:  patterns,
 			Anomalies: anomalies,
 		},
-	}, details
-}
-
-// enhanceParseErrors mejora los errores de parsing con información adicional
-func enhanceParseErrors(errors []models.SyntaxError, commands []models.CommandAST) []models.SyntaxError {
-	enhanced := make([]models.SyntaxError, len(errors))
-
-	for i, error := range errors {
-		enhanced[i] = error
-
-		// Aquí se pueden agregar mejoras específicas a cada error
-		// Por ejemplo, agregar sugerencias contextuales
-		if error.Type == "unknown_command" {
-			// Buscar comandos similares en los comandos válidos parseados
-			similarCommands := findSimilarCommandsInParsed(error.Command, commands)
-			if len(similarCommands) > 0 {
-				// Agregar sugerencias basadas en comandos similares encontrados
-				enhanced[i].Message += ". Comandos similares encontrados: " +
-					joinStringSlice(similarCommands, ", ")
-			}
-		}
+		// NUEVO: Agregar análisis del sistema de archivos
+		FileSystemAnalysis: &fsAnalysis,
 	}
-
-	return enhanced
 }
 
 // performQuickValidation realiza una validación rápida para tiempo real
 func performQuickValidation(content string) []map[string]interface{} {
-	lines := splitLines(content)
+	lines := strings.Split(content, "\n")
 	var errors []map[string]interface{}
 
 	for lineNum, line := range lines {
-		if line == "" || line[0] == '#' {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 
 		// Validaciones básicas rápidas
-		words := splitWords(line)
+		words := strings.Fields(line)
 		if len(words) == 0 {
 			continue
 		}
@@ -259,81 +184,7 @@ func performQuickValidation(content string) []map[string]interface{} {
 	return errors
 }
 
-// generateValidationSummary genera un resumen de las validaciones
-func generateValidationSummary(result *models.AnalysisResult) *ValidationSummary {
-	summary := &ValidationSummary{
-		TotalLines:         0, // Calculado dinámicamente
-		ValidCommands:      len(result.SyntaxAnalysis.Commands),
-		SpellingErrors:     0,
-		StructureErrors:    0,
-		SecurityWarnings:   0,
-		CriticalIssues:     []string{},
-		RecommendedActions: []string{},
-	}
-
-	// Contar tipos de errores
-	for _, error := range result.SyntaxAnalysis.ParseErrors {
-		switch error.Type {
-		case "spelling_error":
-			summary.SpellingErrors++
-			if error.Validation.SpellingSuggestion != nil {
-				summary.TopSpellingErrors = append(summary.TopSpellingErrors,
-					*error.Validation.SpellingSuggestion)
-			}
-		case "missing_argument", "malformed_syntax":
-			summary.StructureErrors++
-		}
-
-		if len(error.Validation.SecurityWarnings) > 0 {
-			summary.SecurityWarnings += len(error.Validation.SecurityWarnings)
-		}
-	}
-
-	// Identificar problemas críticos
-	for _, threat := range result.SemanticAnalysis.Threats {
-		if threat.Level == models.CRITICAL || threat.Level == models.HIGH {
-			summary.CriticalIssues = append(summary.CriticalIssues, threat.Description)
-		}
-	}
-
-	// Generar recomendaciones
-	if summary.SpellingErrors > 0 {
-		summary.RecommendedActions = append(summary.RecommendedActions,
-			"Revisar y corregir errores de ortografía en comandos")
-	}
-	if summary.SecurityWarnings > 0 {
-		summary.RecommendedActions = append(summary.RecommendedActions,
-			"Evaluar comandos marcados como riesgos de seguridad")
-	}
-	if len(summary.CriticalIssues) > 0 {
-		summary.RecommendedActions = append(summary.RecommendedActions,
-			"Atender inmediatamente las amenazas críticas detectadas")
-	}
-
-	// Limitar los errores de ortografía mostrados
-	if len(summary.TopSpellingErrors) > 5 {
-		summary.TopSpellingErrors = summary.TopSpellingErrors[:5]
-	}
-
-	return summary
-}
-
-// Funciones auxiliares
-
-func findSimilarCommandsInParsed(target string, commands []models.CommandAST) []string {
-	var similar []string
-	seen := make(map[string]bool)
-
-	for _, cmd := range commands {
-		if !seen[cmd.Command] && isStringsSimilar(target, cmd.Command) {
-			similar = append(similar, cmd.Command)
-			seen[cmd.Command] = true
-		}
-	}
-
-	return similar
-}
-
+// checkCommonTypos verifica errores comunes de ortografía
 func checkCommonTypos(command string) string {
 	typos := map[string]string{
 		"suo":   "sudo",
@@ -356,6 +207,7 @@ func checkCommonTypos(command string) string {
 	return ""
 }
 
+// isDangerousCommand verifica si un comando es peligroso
 func isDangerousCommand(line string) bool {
 	dangerousPatterns := []string{
 		"sudo rm -rf",
@@ -367,93 +219,9 @@ func isDangerousCommand(line string) bool {
 	}
 
 	for _, pattern := range dangerousPatterns {
-		if contains(line, pattern) {
+		if strings.Contains(line, pattern) {
 			return true
 		}
 	}
 	return false
-}
-
-func splitLines(content string) []string {
-	return strings.Split(content, "\n")
-}
-
-func splitWords(line string) []string {
-	return strings.Fields(strings.TrimSpace(line))
-}
-
-func isStringsSimilar(a, b string) bool {
-	if len(a) == 0 || len(b) == 0 {
-		return false
-	}
-
-	// Calcular distancia de Levenshtein simple
-	if abs(len(a)-len(b)) > 2 {
-		return false
-	}
-
-	return levenshteinDistance(a, b) <= 2
-}
-
-func joinStringSlice(slice []string, separator string) string {
-	return strings.Join(slice, separator)
-}
-
-func contains(text, pattern string) bool {
-	return strings.Contains(text, pattern)
-}
-
-func abs(x int) int {
-	if x < 0 {
-		return -x
-	}
-	return x
-}
-
-func levenshteinDistance(s1, s2 string) int {
-	if len(s1) == 0 {
-		return len(s2)
-	}
-	if len(s2) == 0 {
-		return len(s1)
-	}
-
-	matrix := make([][]int, len(s1)+1)
-	for i := range matrix {
-		matrix[i] = make([]int, len(s2)+1)
-	}
-
-	for i := 0; i <= len(s1); i++ {
-		matrix[i][0] = i
-	}
-	for j := 0; j <= len(s2); j++ {
-		matrix[0][j] = j
-	}
-
-	for i := 1; i <= len(s1); i++ {
-		for j := 1; j <= len(s2); j++ {
-			cost := 0
-			if s1[i-1] != s2[j-1] {
-				cost = 1
-			}
-
-			matrix[i][j] = min(
-				matrix[i-1][j]+1,      // eliminación
-				matrix[i][j-1]+1,      // inserción
-				matrix[i-1][j-1]+cost, // sustitución
-			)
-		}
-	}
-
-	return matrix[len(s1)][len(s2)]
-}
-
-func min(a, b, c int) int {
-	if a <= b && a <= c {
-		return a
-	}
-	if b <= c {
-		return b
-	}
-	return c
 }
