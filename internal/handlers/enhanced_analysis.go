@@ -1,12 +1,14 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	"terminal-history-analyzer/internal/lexer"
 	"terminal-history-analyzer/internal/models"
+	"terminal-history-analyzer/internal/monitor"
 	"terminal-history-analyzer/internal/parser"
 	"terminal-history-analyzer/internal/semantic"
 
@@ -20,6 +22,9 @@ type EnhancedAnalysisRequest struct {
 	EnableRealTime   bool   `json:"enable_real_time,omitempty"`
 	ValidateSpelling bool   `json:"validate_spelling,omitempty"`
 }
+
+// Monitor para análisis mejorado
+var enhancedMonitor = monitor.NewMonitor()
 
 // AnalyzeEnhanced maneja el análisis mejorado con validación sintáctica
 func AnalyzeEnhanced(c *gin.Context) {
@@ -39,8 +44,12 @@ func AnalyzeEnhanced(c *gin.Context) {
 		return
 	}
 
-	// Realizar análisis completo
-	result := analyzeContentEnhanced(request.Content)
+	fmt.Printf("\n🚀 ANÁLISIS MEJORADO - %s (%d caracteres)\n", request.Filename, len(request.Content))
+	fmt.Printf("🔧 Configuraciones: Real-time=%v, Spelling=%v\n", request.EnableRealTime, request.ValidateSpelling)
+	fmt.Println("============================")
+
+	// Realizar análisis completo CON monitoreo
+	result := analyzeContentEnhancedWithMonitoring(request.Content)
 
 	c.JSON(http.StatusOK, result)
 }
@@ -68,21 +77,47 @@ func ValidateRealTime(c *gin.Context) {
 	})
 }
 
-// analyzeContentEnhanced realiza el análisis completo con validación mejorada
-func analyzeContentEnhanced(content string) *models.AnalysisResult {
+// analyzeContentEnhancedWithMonitoring realiza el análisis mejorado con monitoreo
+func analyzeContentEnhancedWithMonitoring(content string) *models.AnalysisResult {
 	startTime := time.Now()
 
-	// Análisis léxico
+	// === FASE 1: ANÁLISIS LÉXICO MEJORADO ===
+	fmt.Printf("🔍 Iniciando análisis léxico mejorado...\n")
+	lexerMetric := enhancedMonitor.StartPhase("LÉXICO_MEJORADO")
+
+	// Análisis léxico con más validaciones
 	lex := lexer.NewLexer(content)
 	tokens, lexErrors := lex.Tokenize()
 
-	// Análisis sintáctico con SpellChecker
+	enhancedMonitor.EndPhase(lexerMetric)
+	fmt.Printf("✅ Análisis léxico mejorado: %d tokens, %d errores\n", len(tokens), len(lexErrors))
+
+	// === FASE 2: ANÁLISIS SINTÁCTICO CON SPELL CHECKER ===
+	fmt.Printf("🔍 Iniciando análisis sintáctico con spell checker...\n")
+	parserMetric := enhancedMonitor.StartPhase("SINTÁCTICO_SPELL")
+
+	// Parser con SpellChecker
 	p := parser.NewParser(tokens)
 	commands, parseErrors, warnings := p.Parse()
+
+	enhancedMonitor.EndPhase(parserMetric)
+	fmt.Printf("✅ Análisis sintáctico con spell: %d comandos, %d errores, %d advertencias\n",
+		len(commands), len(parseErrors), len(warnings))
+
+	// === FASE 3: ANÁLISIS SEMÁNTICO CON SISTEMA DE ARCHIVOS ===
+	fmt.Printf("🔍 Iniciando análisis semántico con filesystem...\n")
+	semanticMetric := enhancedMonitor.StartPhase("SEMÁNTICO_FS")
 
 	// Análisis semántico CON sistema de archivos
 	analyzer := semantic.NewAnalyzer()
 	threats, patterns, anomalies, fsAnalysis := analyzer.AnalyzeWithFileSystem(commands)
+
+	enhancedMonitor.EndPhase(semanticMetric)
+	fmt.Printf("✅ Análisis semántico FS: %d amenazas, %d patrones, %d anomalías, %d errores FS\n",
+		len(threats), len(patterns), len(anomalies), len(fsAnalysis.Errors))
+
+	// Generar reporte de monitoreo
+	enhancedMonitor.FinishAnalysis()
 
 	// Estadísticas
 	commandFreq := calculateCommandFrequency(commands)
@@ -132,96 +167,34 @@ func analyzeContentEnhanced(content string) *models.AnalysisResult {
 			Patterns:  patterns,
 			Anomalies: anomalies,
 		},
-		// NUEVO: Agregar análisis del sistema de archivos
-		FileSystemAnalysis: &fsAnalysis,
+		FileSystemAnalysis: &fsAnalysis, // Análisis adicional de filesystem
 	}
 }
 
-// performQuickValidation realiza una validación rápida para tiempo real
-func performQuickValidation(content string) []map[string]interface{} {
+// performQuickValidation realiza validación rápida para tiempo real
+func performQuickValidation(content string) []string {
+	var errors []string
+
 	lines := strings.Split(content, "\n")
-	var errors []map[string]interface{}
-
-	for lineNum, line := range lines {
+	for i, line := range lines {
 		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
+		if line == "" {
 			continue
 		}
 
-		// Validaciones básicas rápidas
-		words := strings.Fields(line)
-		if len(words) == 0 {
-			continue
+		// Validaciones rápidas
+		if strings.Contains(line, "rm -rf /") {
+			errors = append(errors, fmt.Sprintf("Línea %d: Comando extremadamente peligroso detectado", i+1))
 		}
 
-		command := words[0]
-
-		// Verificar errores de ortografía comunes
-		if suggestion := checkCommonTypos(command); suggestion != "" {
-			errors = append(errors, map[string]interface{}{
-				"line":       lineNum + 1,
-				"type":       "spelling",
-				"message":    "Posible error de ortografía",
-				"original":   command,
-				"suggestion": suggestion,
-				"command":    line,
-				"confidence": 0.9,
-			})
+		if strings.Contains(line, "sudo rm -rf") {
+			errors = append(errors, fmt.Sprintf("Línea %d: Eliminación peligrosa con privilegios elevados", i+1))
 		}
 
-		// Verificar comandos peligrosos
-		if isDangerousCommand(line) {
-			errors = append(errors, map[string]interface{}{
-				"line":    lineNum + 1,
-				"type":    "security",
-				"level":   "high",
-				"message": "Comando potencialmente peligroso detectado",
-				"command": line,
-			})
+		if strings.Contains(line, "dd if=") && strings.Contains(line, "of=/dev/") {
+			errors = append(errors, fmt.Sprintf("Línea %d: Operación de disco peligrosa detectada", i+1))
 		}
 	}
 
 	return errors
-}
-
-// checkCommonTypos verifica errores comunes de ortografía
-func checkCommonTypos(command string) string {
-	typos := map[string]string{
-		"suo":   "sudo",
-		"sl":    "ls",
-		"cta":   "cat",
-		"grp":   "grep",
-		"crul":  "curl",
-		"shh":   "ssh",
-		"gti":   "git",
-		"vmi":   "vim",
-		"tpo":   "top",
-		"kil":   "kill",
-		"celar": "clear",
-		"ehco":  "echo",
-	}
-
-	if correction, exists := typos[command]; exists {
-		return correction
-	}
-	return ""
-}
-
-// isDangerousCommand verifica si un comando es peligroso
-func isDangerousCommand(line string) bool {
-	dangerousPatterns := []string{
-		"sudo rm -rf",
-		"rm -rf /",
-		"chmod 777",
-		"dd if=",
-		"mkfs",
-		"fdisk",
-	}
-
-	for _, pattern := range dangerousPatterns {
-		if strings.Contains(line, pattern) {
-			return true
-		}
-	}
-	return false
 }

